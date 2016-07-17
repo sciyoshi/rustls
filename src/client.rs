@@ -2,6 +2,7 @@ use msgs::enums::CipherSuite;
 use session::{SessionSecrets, SessionCommon};
 use suites::{SupportedCipherSuite, ALL_CIPHERSUITES};
 use msgs::handshake::{CertificatePayload, DigitallySignedStruct, SessionID};
+use msgs::handshake::{EllipticCurveList, ECPointFormatList, ASN1Cert, SupportedSignatureAlgorithms};
 use msgs::enums::ContentType;
 use msgs::message::Message;
 use msgs::persist;
@@ -10,6 +11,7 @@ use hash_hs;
 use verify;
 use error::TLSError;
 use rand;
+use sign;
 
 use std::sync::{Arc, Mutex};
 use std::io;
@@ -42,6 +44,60 @@ impl StoresClientSessions for NoSessionStorage {
   }
 }
 
+pub trait ResolvesCert {
+  /// Choose a certificate chain and matching key given any
+  /// sigalgs, EC curves and EC point format extensions
+  /// from the server.
+  ///
+  /// The certificate chain is returned as a `CertificatePayload`,
+  /// the key is inside a `Signer`.
+  fn resolve(&self,
+             sigalgs: &SupportedSignatureAlgorithms,
+             ec_curves: &EllipticCurveList,
+             ec_pointfmts: &ECPointFormatList) -> Result<(CertificatePayload, Arc<Box<sign::Signer>>), ()>;
+}
+
+
+/* Something which never resolves a certificate. */
+struct FailResolveChain {}
+
+impl ResolvesCert for FailResolveChain {
+  fn resolve(&self,
+             _sigalgs: &SupportedSignatureAlgorithms,
+             _ec_curves: &EllipticCurveList,
+             _ec_pointfmts: &ECPointFormatList) -> Result<(CertificatePayload, Arc<Box<sign::Signer>>), ()> {
+    Err(())
+  }
+}
+
+/* Something which always resolves to the same cert chain. */
+struct AlwaysResolvesChain {
+  chain: CertificatePayload,
+  key: Arc<Box<sign::Signer>>
+}
+
+impl AlwaysResolvesChain {
+  fn new_rsa(chain: Vec<Vec<u8>>, priv_key: &[u8]) -> AlwaysResolvesChain {
+    let key = sign::RSASigner::new(priv_key)
+      .expect("Invalid RSA private key");
+    let mut payload = Vec::new();
+    for cert in chain {
+      payload.push(ASN1Cert { body: cert.into_boxed_slice() });
+    }
+    AlwaysResolvesChain { chain: payload, key: Arc::new(Box::new(key)) }
+  }
+}
+
+impl ResolvesCert for AlwaysResolvesChain {
+  fn resolve(&self,
+             _sigalgs: &SupportedSignatureAlgorithms,
+             _ec_curves: &EllipticCurveList,
+             _ec_pointfmts: &ECPointFormatList) -> Result<(CertificatePayload, Arc<Box<sign::Signer>>), ()> {
+    Ok((self.chain.clone(), self.key.clone()))
+  }
+}
+
+
 /// Common configuration for (typically) all connections made by
 /// a program.
 ///
@@ -62,7 +118,9 @@ pub struct ClientConfig {
   pub session_persistence: Mutex<Box<StoresClientSessions + Send + Sync>>,
 
   /// Our MTU.  If None, we don't limit TLS message sizes.
-  pub mtu: Option<usize>
+  pub mtu: Option<usize>,
+
+  pub cert_resolver: Box<ResolvesCert>
 }
 
 impl ClientConfig {
@@ -75,7 +133,8 @@ impl ClientConfig {
       root_store: verify::RootCertStore::empty(),
       alpn_protocols: Vec::new(),
       session_persistence: Mutex::new(Box::new(NoSessionStorage {})),
-      mtu: None
+      mtu: None,
+      cert_resolver: Box::new(FailResolveChain {})
     }
   }
 
@@ -109,6 +168,16 @@ impl ClientConfig {
       self.mtu = None;
     }
   }
+
+  /// Sets a single certificate chain and matching private key.  This
+  /// certificate and key is used for all subsequent connections.
+  ///
+  /// `cert_chain` is a vector of DER-encoded certificates.
+  /// `key_der` is a DER-encoded RSA private key.
+  pub fn set_single_cert(&mut self, cert_chain: Vec<Vec<u8>>, key_der: Vec<u8>) {
+    self.cert_resolver = Box::new(AlwaysResolvesChain::new_rsa(cert_chain, &key_der));
+  }
+
 }
 
 pub struct ClientHandshakeData {

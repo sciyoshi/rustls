@@ -281,7 +281,7 @@ If --cafile is not supplied, CA certificates are read from
 `/etc/ssl/certs/ca-certificates.crt'.
 
 Usage:
-  tlsclient [--verbose] [-p PORT] [--http] [--mtu MTU] [--cache CACHE] [--cafile CAFILE] [--suite SUITE...] [--proto PROTOCOL...] <hostname>
+  tlsclient [--verbose] [-p PORT] [--http] [--mtu MTU] [--cache CACHE] [--cafile CAFILE] [--suite SUITE...] [--proto PROTOCOL...] [--certs CERTFILE --key KEYFILE] <hostname>
   tlsclient --version
   tlsclient --help
 
@@ -294,6 +294,13 @@ Options:
     --proto PROTOCOL    Send ALPN extension containing PROTOCOL.
     --cache CACHE       Save session cache to file CACHE.
     --verbose           Emit log output.
+    --mtu MTU           Limit outgoing messages to MTU bytes.
+    --certs CERTFILE    Read client certificates from CERTFILE.
+                        This should contain PEM-format certificates
+                        in the right order (the first certificate should
+                        certify KEYFILE, the last should be a root CA).
+    --key KEYFILE       Read private key from KEYFILE.  This should be a RSA private key,
+                        in PEM format.
     --mtu MTU           Limit outgoing messages to MTU bytes.
     --version           Show tool version.
     --help              Show this screen.
@@ -309,6 +316,8 @@ struct Args {
   flag_mtu: Option<usize>,
   flag_cafile: Option<String>,
   flag_cache: Option<String>,
+  flag_certs: Option<String>,
+  flag_key: Option<String>,
   arg_hostname: String
 }
 
@@ -356,6 +365,24 @@ fn lookup_suites(suites: &Vec<String>) -> Vec<&'static rustls::SupportedCipherSu
   out
 }
 
+fn load_certs(filename: &str) -> Vec<Vec<u8>> {
+  let certfile = fs::File::open(filename)
+    .expect("cannot open certificate file");
+  let mut reader = BufReader::new(certfile);
+  rustls::internal::pemfile::certs(&mut reader)
+    .unwrap()
+}
+
+fn load_private_key(filename: &str) -> Vec<u8> {
+  let keyfile = fs::File::open(filename)
+    .expect("cannot open private key file");
+  let mut reader = BufReader::new(keyfile);
+  let keys = rustls::internal::pemfile::rsa_private_keys(&mut reader)
+    .unwrap();
+  assert!(keys.len() == 1);
+  keys[0].clone()
+}
+
 /// Build a ClientConfig from our arguments
 fn make_config(args: &Args) -> Arc<rustls::ClientConfig> {
   let mut config = rustls::ClientConfig::new();
@@ -379,6 +406,12 @@ fn make_config(args: &Args) -> Arc<rustls::ClientConfig> {
   config.set_protocols(&args.flag_proto);
   config.set_persistence(persist);
   config.set_mtu(&args.flag_mtu);
+
+  if args.flag_certs.is_some() && args.flag_key.is_some() {
+    let certs = load_certs(&args.flag_certs.as_ref().unwrap());
+    let privkey = load_private_key(&args.flag_key.as_ref().unwrap());
+    config.set_single_cert(certs, privkey);
+  }
 
   Arc::new(config)
 }
