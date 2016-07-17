@@ -1,9 +1,9 @@
 use msgs::enums::{ContentType, HandshakeType};
 use msgs::enums::{Compression, ProtocolVersion, AlertDescription};
 use msgs::message::{Message, MessagePayload};
-use msgs::base::{Payload, PayloadU8};
+use msgs::base::{Payload, PayloadU8, PayloadU24};
 use msgs::handshake::{HandshakePayload, HandshakeMessagePayload, ClientHelloPayload};
-use msgs::handshake::{SessionID, Random};
+use msgs::handshake::{SessionID, Random, CertificatePayload};
 use msgs::handshake::ClientExtension;
 use msgs::handshake::{SupportedSignatureAlgorithms, SupportedMandatedSignatureAlgorithms};
 use msgs::handshake::{EllipticCurveList, SupportedCurves};
@@ -217,7 +217,7 @@ fn handle_server_kx(sess: &mut ClientSessionImpl, m: &Message) -> Result<ConnSta
     _ => ()
   }
 
-  Ok(ConnState::ExpectServerHelloDone)
+  Ok(ConnState::ExpectServerCertificateRequest)
 }
 
 pub static EXPECT_SERVER_KX: Handler = Handler {
@@ -227,6 +227,47 @@ pub static EXPECT_SERVER_KX: Handler = Handler {
   },
   handle: handle_server_kx
 };
+
+fn emit_certificate(sess: &mut ClientSessionImpl) {
+  let cert_chain: Vec<PayloadU24> = (sess.handshake_data.server_cert_chain.as_ref() as &Vec<PayloadU24>).clone();
+
+  let c = Message {
+    typ: ContentType::Handshake,
+    version: ProtocolVersion::TLSv1_2,
+    payload: MessagePayload::Handshake(
+      HandshakeMessagePayload {
+        typ: HandshakeType::Certificate,
+        payload: HandshakePayload::Certificate(cert_chain)
+      }
+    )
+  };
+
+  sess.handshake_data.hash_message(&c);
+  sess.common.send_msg(&c, false);
+}
+
+fn handle_server_certificate_request(sess: &mut ClientSessionImpl, m: &Message) -> Result<ConnState, TLSError> {
+  let payload = extract_handshake!(m, HandshakePayload::CertificateRequest);
+
+  if payload.is_none() {
+    return handle_server_hello_done(sess, m);
+  }
+
+  info!("handling cert request! {:?}", m);
+
+  emit_certificate(sess);
+
+  Ok(ConnState::ExpectServerHelloDone)
+}
+
+pub static EXPECT_SERVER_CERTIFICATE_REQUEST: Handler = Handler {
+  expect: Expectation {
+    content_types: &[ContentType::Handshake],
+    handshake_types: &[HandshakeType::CertificateRequest, HandshakeType::ServerHelloDone]
+  },
+  handle: handle_server_certificate_request
+};
+
 
 fn dumphex(_label: &str, _bytes: &[u8]) {
   /*
@@ -309,9 +350,11 @@ fn handle_server_hello_done(sess: &mut ClientSessionImpl, m: &Message) -> Result
    * 4. emit a Finished, our first encrypted message under the new keys. */
 
   /* 1. */
+  /*
   try!(verify::verify_cert(&sess.config.root_store,
                            &sess.handshake_data.server_cert_chain,
                            &sess.handshake_data.dns_name));
+  */
 
   /* 2. */
   /* Build up the contents of the signed message.

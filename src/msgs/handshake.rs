@@ -1,7 +1,7 @@
 use msgs::enums::{ProtocolVersion, HandshakeType};
 use msgs::enums::{CipherSuite, Compression, ExtensionType, ECPointFormat, NamedCurve};
 use msgs::enums::{HashAlgorithm, SignatureAlgorithm, HeartbeatMode, ServerNameType};
-use msgs::enums::{ECCurveType};
+use msgs::enums::{ECCurveType, ClientCertificateType};
 use msgs::base::{Payload, PayloadU8, PayloadU16, PayloadU24};
 use msgs::codec;
 use msgs::codec::{Codec, Reader};
@@ -830,12 +830,34 @@ impl ServerKeyExchangePayload {
 }
 
 #[derive(Debug)]
+pub struct CertificateRequestPayload {
+  pub certificate_types: Vec<ClientCertificateType>,
+  pub supported_signature_algorithms: Vec<SignatureAndHashAlgorithm>,
+  pub certificate_authorities: Vec<PayloadU16>
+}
+
+impl Codec for CertificateRequestPayload {
+  fn encode(&self, bytes: &mut Vec<u8>) {
+
+  }
+
+  fn read(r: &mut Reader) -> Option<CertificateRequestPayload> {
+    Some(CertificateRequestPayload {
+      certificate_types: try_ret!(codec::read_vec_u8::<ClientCertificateType>(r)),
+      supported_signature_algorithms: try_ret!(codec::read_vec_u16::<SignatureAndHashAlgorithm>(r)),
+      certificate_authorities: try_ret!(codec::read_vec_u16::<PayloadU16>(r))
+    })
+  }
+}
+
+#[derive(Debug)]
 pub enum HandshakePayload {
   HelloRequest,
   ClientHello(ClientHelloPayload),
   ServerHello(ServerHelloPayload),
   Certificate(CertificatePayload),
   ServerKeyExchange(ServerKeyExchangePayload),
+  CertificateRequest(CertificateRequestPayload),
   ServerHelloDone,
   ClientKeyExchange(Payload),
   Finished(Payload),
@@ -850,6 +872,7 @@ impl HandshakePayload {
       HandshakePayload::ServerHello(ref x) => x.encode(bytes),
       HandshakePayload::Certificate(ref x) => x.encode(bytes),
       HandshakePayload::ServerKeyExchange(ref x) => x.encode(bytes),
+      HandshakePayload::CertificateRequest(ref x) => x.encode(bytes),
       HandshakePayload::ServerHelloDone => {},
       HandshakePayload::ClientKeyExchange(ref x) => x.encode(bytes),
       HandshakePayload::Finished(ref x) => x.encode(bytes),
@@ -892,6 +915,8 @@ impl Codec for HandshakeMessagePayload {
         HandshakePayload::Certificate(try_ret!(CertificatePayload::read(&mut sub))),
       HandshakeType::ServerKeyExchange =>
         HandshakePayload::ServerKeyExchange(try_ret!(ServerKeyExchangePayload::read(&mut sub))),
+      HandshakeType::CertificateRequest =>
+        HandshakePayload::CertificateRequest(try_ret!(CertificateRequestPayload::read(&mut sub))),
       HandshakeType::ServerHelloDone if sub.left() == 0 =>
         HandshakePayload::ServerHelloDone,
       HandshakeType::ClientKeyExchange =>

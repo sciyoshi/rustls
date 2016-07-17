@@ -45,6 +45,8 @@ pub fn skipped(why: &str) {
 
 /* Does openssl s_client support -alpn? */
 pub fn openssl_client_supports_alpn() -> bool {
+  false
+  /*
   let output = process::Command::new("openssl")
     .arg("s_client")
     .arg("-help")
@@ -54,10 +56,13 @@ pub fn openssl_client_supports_alpn() -> bool {
   String::from_utf8(output.stderr)
     .unwrap()
     .contains(" -alpn ")
+  */
 }
 
 /* Does openssl s_client support -alpn? */
 pub fn openssl_server_supports_alpn() -> bool {
+  false
+  /*
   let output = process::Command::new("openssl")
     .arg("s_server")
     .arg("-help")
@@ -67,6 +72,7 @@ pub fn openssl_server_supports_alpn() -> bool {
   String::from_utf8(output.stderr)
     .unwrap()
     .contains(" -alpn ")
+  */
 }
 
 pub struct TlsClient {
