@@ -832,23 +832,26 @@ impl ServerKeyExchangePayload {
 #[derive(Debug)]
 pub struct CertificateRequestPayload {
   pub certificate_types: Vec<ClientCertificateType>,
-  pub supported_signature_algorithms: Vec<SignatureAndHashAlgorithm>,
+  pub supported_signature_algorithms: SupportedSignatureAlgorithms,
   pub certificate_authorities: Vec<PayloadU16>
 }
 
 impl Codec for CertificateRequestPayload {
   fn encode(&self, bytes: &mut Vec<u8>) {
-
+    // FIXME
   }
 
   fn read(r: &mut Reader) -> Option<CertificateRequestPayload> {
     Some(CertificateRequestPayload {
       certificate_types: try_ret!(codec::read_vec_u8::<ClientCertificateType>(r)),
-      supported_signature_algorithms: try_ret!(codec::read_vec_u16::<SignatureAndHashAlgorithm>(r)),
+      supported_signature_algorithms: try_ret!(SupportedSignatureAlgorithms::read(r)),
       certificate_authorities: try_ret!(codec::read_vec_u16::<PayloadU16>(r))
     })
   }
 }
+
+#[derive(Debug)]
+pub struct CertificateVerifyPayload {}
 
 #[derive(Debug)]
 pub enum HandshakePayload {
@@ -860,6 +863,7 @@ pub enum HandshakePayload {
   CertificateRequest(CertificateRequestPayload),
   ServerHelloDone,
   ClientKeyExchange(Payload),
+  CertificateVerify(DigitallySignedStruct),
   Finished(Payload),
   Unknown(Payload)
 }
@@ -875,6 +879,7 @@ impl HandshakePayload {
       HandshakePayload::CertificateRequest(ref x) => x.encode(bytes),
       HandshakePayload::ServerHelloDone => {},
       HandshakePayload::ClientKeyExchange(ref x) => x.encode(bytes),
+      HandshakePayload::CertificateVerify(ref x) => x.encode(bytes),
       HandshakePayload::Finished(ref x) => x.encode(bytes),
       HandshakePayload::Unknown(ref x) => x.encode(bytes)
     }
@@ -921,6 +926,8 @@ impl Codec for HandshakeMessagePayload {
         HandshakePayload::ServerHelloDone,
       HandshakeType::ClientKeyExchange =>
         HandshakePayload::ClientKeyExchange(try_ret!(Payload::read(&mut sub))),
+      HandshakeType::CertificateVerify =>
+        HandshakePayload::CertificateVerify(try_ret!(DigitallySignedStruct::read(&mut sub))),
       HandshakeType::Finished =>
         HandshakePayload::Finished(try_ret!(Payload::read(&mut sub))),
       _ =>

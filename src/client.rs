@@ -2,7 +2,7 @@ use msgs::enums::CipherSuite;
 use session::{SessionSecrets, SessionCommon};
 use suites::{SupportedCipherSuite, ALL_CIPHERSUITES};
 use msgs::handshake::{CertificatePayload, DigitallySignedStruct, SessionID};
-use msgs::handshake::{EllipticCurveList, ECPointFormatList, ASN1Cert, SupportedSignatureAlgorithms};
+use msgs::handshake::{EllipticCurveList, ECPointFormatList, ASN1Cert, SupportedSignatureAlgorithms, SignatureAndHashAlgorithm};
 use msgs::enums::ContentType;
 use msgs::message::Message;
 use msgs::persist;
@@ -188,6 +188,8 @@ pub struct ClientHandshakeData {
   pub session_id: SessionID,
   pub server_kx_params: Vec<u8>,
   pub server_kx_sig: Option<DigitallySignedStruct>,
+  pub client_verify_signer: Option<Arc<Box<sign::Signer>>>,
+  pub client_verify_sigalg: Option<SignatureAndHashAlgorithm>,
   pub handshake_hash: Option<hash_hs::HandshakeHash>,
   pub resuming_session: Option<persist::ClientSessionValue>,
   pub secrets: SessionSecrets
@@ -203,6 +205,8 @@ impl ClientHandshakeData {
       session_id: SessionID::empty(),
       server_kx_params: Vec::new(),
       server_kx_sig: None,
+      client_verify_signer: None,
+      client_verify_sigalg: None,
       handshake_hash: None,
       resuming_session: None,
       secrets: SessionSecrets::for_client()

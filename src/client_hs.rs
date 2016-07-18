@@ -1,7 +1,7 @@
-use msgs::enums::{ContentType, HandshakeType};
+use msgs::enums::{ContentType, HandshakeType, HashAlgorithm, SignatureAlgorithm};
 use msgs::enums::{Compression, ProtocolVersion, AlertDescription};
 use msgs::message::{Message, MessagePayload};
-use msgs::base::{Payload, PayloadU8, PayloadU24};
+use msgs::base::{Payload, PayloadU8, PayloadU16, PayloadU24};
 use msgs::handshake::{HandshakePayload, HandshakeMessagePayload, ClientHelloPayload};
 use msgs::handshake::{SessionID, Random, CertificatePayload};
 use msgs::handshake::ClientExtension;
@@ -9,14 +9,16 @@ use msgs::handshake::{SupportedSignatureAlgorithms, SupportedMandatedSignatureAl
 use msgs::handshake::{EllipticCurveList, SupportedCurves};
 use msgs::handshake::{ECPointFormatList, SupportedPointFormats};
 use msgs::handshake::{ProtocolNameList, ConvertProtocolNameList};
-use msgs::handshake::ServerKeyExchangePayload;
+use msgs::handshake::{ServerKeyExchangePayload, DigitallySignedStruct, SignatureAndHashAlgorithm};
 use msgs::codec::Codec;
 use msgs::persist;
 use msgs::ccs::ChangeCipherSpecPayload;
+use std::sync::Arc;
 use client::{ClientSessionImpl, ConnState};
 use suites;
 use hash_hs;
 use verify;
+use sign;
 use error::TLSError;
 use handshake::Expectation;
 
@@ -228,16 +230,14 @@ pub static EXPECT_SERVER_KX: Handler = Handler {
   handle: handle_server_kx
 };
 
-fn emit_certificate(sess: &mut ClientSessionImpl) {
-  let cert_chain: Vec<PayloadU24> = (sess.handshake_data.server_cert_chain.as_ref() as &Vec<PayloadU24>).clone();
-
+fn emit_certificate(sess: &mut ClientSessionImpl, cert: CertificatePayload) {
   let c = Message {
     typ: ContentType::Handshake,
     version: ProtocolVersion::TLSv1_2,
     payload: MessagePayload::Handshake(
       HandshakeMessagePayload {
         typ: HandshakeType::Certificate,
-        payload: HandshakePayload::Certificate(cert_chain)
+        payload: HandshakePayload::Certificate(cert)
       }
     )
   };
@@ -255,7 +255,26 @@ fn handle_server_certificate_request(sess: &mut ClientSessionImpl, m: &Message) 
 
   info!("handling cert request! {:?}", m);
 
-  emit_certificate(sess);
+  let cert = sess.config.cert_resolver.resolve(
+    &payload.unwrap().supported_signature_algorithms,
+    &vec![], // FIXME?
+    &vec![]  // FIXME?
+  ).ok();
+
+  if cert.is_none() {
+    return Ok(ConnState::ExpectServerHelloDone);
+  }
+
+  let (cert_payload, signer) = cert.unwrap();
+
+  sess.handshake_data.client_verify_signer = Some(signer);
+
+  sess.handshake_data.client_verify_sigalg = Some(SignatureAndHashAlgorithm {
+    hash: HashAlgorithm::SHA256,
+    sign: SignatureAlgorithm::RSA
+  });
+
+  emit_certificate(sess, cert_payload);
 
   Ok(ConnState::ExpectServerHelloDone)
 }
@@ -300,6 +319,24 @@ fn emit_clientkx(sess: &mut ClientSessionImpl, kxd: &suites::KeyExchangeResult) 
 
   sess.handshake_data.hash_message(&ckx);
   sess.common.send_msg(&ckx, false);
+}
+
+fn emit_certificate_verify(sess: &mut ClientSessionImpl, dss: DigitallySignedStruct) {
+  let certverify = Message {
+    typ: ContentType::Handshake,
+    version: ProtocolVersion::TLSv1_2,
+    payload: MessagePayload::Handshake(
+      HandshakeMessagePayload {
+        typ: HandshakeType::CertificateVerify,
+        payload: HandshakePayload::CertificateVerify(dss)
+      }
+    )
+  };
+
+  debug!("Sending CertificateVerify {:#?}", &certverify);
+
+  sess.handshake_data.hash_message(&certverify);
+  sess.common.send_msg(&certverify, false);
 }
 
 fn emit_ccs(sess: &mut ClientSessionImpl) {
@@ -379,6 +416,24 @@ fn handle_server_hello_done(sess: &mut ClientSessionImpl, m: &Message) -> Result
 
   /* 3b. */
   emit_clientkx(sess, &kxd);
+
+  /* client certificate verification */
+
+  if sess.handshake_data.client_verify_sigalg.is_some() && sess.handshake_data.client_verify_signer.is_some() {
+    let sigalg = sess.handshake_data.client_verify_sigalg.as_ref().unwrap().clone();
+    let signer = sess.handshake_data.client_verify_signer.as_ref().unwrap().clone();
+
+    let hash = sess.handshake_data.handshake_hash.as_ref().unwrap().get_current_hash();
+
+    let sig = try!(
+      signer.sign(&sigalg.hash, &hash)
+      .map_err(|_| TLSError::General("signing failed".to_string()))
+    );
+
+    let dss = DigitallySignedStruct::new(&sigalg, sig);
+
+    emit_certificate_verify(sess, dss);
+  }
 
   /* 3c. */
   emit_ccs(sess);
