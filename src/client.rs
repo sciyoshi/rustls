@@ -113,6 +113,9 @@ pub struct ClientConfig {
   /// Collection of root certificates.
   pub root_store: verify::RootCertStore,
 
+  /// Custom server certificate verifier
+  pub certificate_verifier: Box<Fn(&verify::RootCertStore, &Vec<ASN1Cert>, &str) -> Result<(), TLSError>>,
+
   /// Which ALPN protocols we include in our client hello.
   /// If empty, no ALPN extension is sent.
   pub alpn_protocols: Vec<String>,
@@ -135,6 +138,7 @@ impl ClientConfig {
     ClientConfig {
       ciphersuites: ALL_CIPHERSUITES.to_vec(),
       root_store: verify::RootCertStore::empty(),
+      certificate_verifier: Box::new(verify::verify_cert),
       alpn_protocols: Vec::new(),
       session_persistence: Mutex::new(Box::new(NoSessionStorage {})),
       mtu: None,
@@ -183,6 +187,11 @@ impl ClientConfig {
     self.client_auth_cert_resolver = Box::new(
       AlwaysResolvesClientCert::new_rsa(cert_chain, &key_der)
     );
+  }
+
+  pub fn set_certificate_verifier(&mut self,
+                                  verifier: Box<Fn(&verify::RootCertStore, &Vec<ASN1Cert>, &str) -> Result<(), TLSError>>) {
+    self.certificate_verifier = verifier;
   }
 }
 

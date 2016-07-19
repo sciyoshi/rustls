@@ -1,4 +1,4 @@
-use msgs::enums::{ContentType, HandshakeType};
+use msgs::enums::{ContentType, HandshakeType, HashAlgorithm, SignatureAlgorithm};
 use msgs::enums::{Compression, ProtocolVersion, AlertDescription};
 use msgs::message::{Message, MessagePayload};
 use msgs::base::{Payload, PayloadU8};
@@ -8,7 +8,7 @@ use msgs::handshake::ClientExtension;
 use msgs::handshake::{SupportedSignatureAlgorithms, SupportedMandatedSignatureAlgorithms};
 use msgs::handshake::{EllipticCurveList, SupportedCurves};
 use msgs::handshake::{ECPointFormatList, SupportedPointFormats};
-use msgs::handshake::{ProtocolNameList, ConvertProtocolNameList};
+use msgs::handshake::{ProtocolNameList, ConvertProtocolNameList, SignatureAndHashAlgorithm};
 use msgs::handshake::ServerKeyExchangePayload;
 use msgs::handshake::DigitallySignedStruct;
 use msgs::enums::ClientCertificateType;
@@ -374,8 +374,11 @@ fn handle_certificate_req(sess: &mut ClientSessionImpl, m: &Message) -> Result<C
     &certreq.canames, &certreq.sigalgs
   );
 
-  let scs = sess.handshake_data.ciphersuite.as_ref().unwrap();
-  let maybe_sigalg = scs.resolve_sig_alg(&certreq.sigalgs);
+  //let scs = sess.handshake_data.ciphersuite.as_ref().unwrap();
+  let maybe_sigalg = Some(SignatureAndHashAlgorithm {
+    hash: HashAlgorithm::SHA256,
+    sign: SignatureAlgorithm::RSA
+  });//scs.resolve_sig_alg(&certreq.sigalgs);
 
   if maybe_certkey.is_some() && maybe_sigalg.is_some() {
     let (cert, key) = maybe_certkey.unwrap();
@@ -424,9 +427,9 @@ fn handle_server_hello_done(sess: &mut ClientSessionImpl, m: &Message) -> Result
    * 5. emit a Finished, our first encrypted message under the new keys. */
 
   /* 1. */
-  try!(verify::verify_cert(&sess.config.root_store,
-                           &sess.handshake_data.server_cert_chain,
-                           &sess.handshake_data.dns_name));
+  try!(sess.config.certificate_verifier.as_ref()(&sess.config.root_store,
+                                                 &sess.handshake_data.server_cert_chain,
+                                                 &sess.handshake_data.dns_name));
 
   /* 2. */
   /* Build up the contents of the signed message.
